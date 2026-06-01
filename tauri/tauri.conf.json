@@ -10,18 +10,7 @@
     "frontendDist": "../gui/dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Wandesk",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 960,
-        "minHeight": 600,
-        "center": true,
-        "decorations": true,
-        "visible": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* https://127.0.0.1:*; font-src 'self'"
     }
@@ -37,10 +26,5 @@
       "icons/icon.ico"
     ],
     "resources": ["resources/aios/README.md"]
-  },
-  "plugins": {
-    "single-instance": {
-      "enabled": true
-    }
   }
 }

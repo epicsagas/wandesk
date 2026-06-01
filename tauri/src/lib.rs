@@ -57,104 +57,97 @@ pub fn run() {
         });
 }
 
-/// Main boot sequence: allocate ports → spawn splash → start servers → show main window.
+/// Main boot sequence: dev mode uses beforeDevCommand servers, prod spawns sidecars.
 fn boot_servers(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Find free ports
-    let main_port = portpicker::pick_unused_port()
-        .ok_or("Failed to find a free port for main server")?;
-    let apps_port = portpicker::pick_unused_port()
-        .ok_or("Failed to find a free port for apps server")?;
+    let dev_mode = cfg!(debug_assertions);
 
-    println!("[wandesk] Allocated ports: main={}, apps={}", main_port, apps_port);
+    let (main_port, apps_port) = if dev_mode {
+        // Dev mode: beforeDevCommand already started servers on 9502/9503
+        println!("[wandesk] Dev mode — using beforeDevCommand servers");
+        (9502u16, 9503u16)
+    } else {
+        // Production: allocate ports and spawn sidecar servers
+        let main_port = portpicker::pick_unused_port()
+            .ok_or("Failed to find a free port for main server")?;
+        let apps_port = portpicker::pick_unused_port()
+            .ok_or("Failed to find a free port for apps server")?;
 
-    // Store ports in state
-    {
-        let state = app.state::<AppState>();
-        *state.main_port.lock().unwrap() = main_port;
-        *state.apps_port.lock().unwrap() = apps_port;
-    }
+        println!("[wandesk] Allocated ports: main={}, apps={}", main_port, apps_port);
 
-    // 2. Resolve data directory
-    let data_dir = resolve_data_dir();
-    fs::create_dir_all(&data_dir)?;
-    println!("[wandesk] Data directory: {}", data_dir.display());
+        // Store ports in state
+        {
+            let state = app.state::<AppState>();
+            *state.main_port.lock().unwrap() = main_port;
+            *state.apps_port.lock().unwrap() = apps_port;
+        }
 
-    let resource_dir = resolve_resource_dir(app);
-    println!("[wandesk] Resource directory: {}", resource_dir.display());
+        // Resolve directories
+        let data_dir = resolve_data_dir(app);
+        fs::create_dir_all(&data_dir)?;
+        println!("[wandesk] Data directory: {}", data_dir.display());
 
-    // 3. Clean up orphaned processes from previous crashes
-    sidecar::cleanup_orphans(main_port, apps_port);
+        let resource_dir = resolve_resource_dir(app);
+        println!("[wandesk] Resource directory: {}", resource_dir.display());
 
-    // 4. Show splash screen
-    let splash = WebviewWindowBuilder::new(
-        app,
-        "splash",
-        WebviewUrl::App("splash.html".into()),
-    )
-    .title("Wandesk")
-    .inner_size(480.0, 320.0)
-    .center()
-    .resizable(false)
-    .decorations(false)
-    .always_on_top(true)
-    .build()?;
+        // Clean up orphaned processes from previous crashes
+        sidecar::cleanup_orphans(main_port, apps_port);
 
-    // 5. Spawn Node.js servers
-    let node_bin = resolve_node_binary();
-    let tsx_cli = resource_dir.join("node_modules").join("tsx").join("dist").join("cli.mjs");
-    let server_entry = resource_dir.join("server").join("main").join("index.ts");
-    let apps_entry = resource_dir.join("server").join("apps").join("index.ts");
+        // Spawn Node.js servers
+        let node_bin = resolve_node_binary();
+        let tsx_cli = resource_dir.join("node_modules").join("tsx").join("dist").join("cli.mjs");
+        let server_entry = resource_dir.join("server").join("main").join("index.ts");
+        let apps_entry = resource_dir.join("server").join("apps").join("index.ts");
 
-    // Build env with AIOS_DATA_DIR
-    let mut env_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
-    env_vars.insert("AIOS_DATA_DIR".into(), data_dir.to_string_lossy().into());
-    env_vars.insert("AIOS_MAIN_PORT".into(), main_port.to_string());
-    env_vars.insert("AIOS_APPS_PORT".into(), apps_port.to_string());
-    env_vars.insert("AIOS_DESKTOP_MODE".into(), "1".into());
-    sidecar::enhance_path(&mut env_vars);
+        let mut env_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+        env_vars.insert("AIOS_DATA_DIR".into(), data_dir.to_string_lossy().into());
+        env_vars.insert("AIOS_MAIN_PORT".into(), main_port.to_string());
+        env_vars.insert("AIOS_APPS_PORT".into(), apps_port.to_string());
+        env_vars.insert("AIOS_DESKTOP_MODE".into(), "1".into());
+        sidecar::enhance_path(&mut env_vars);
 
-    println!("[wandesk] Spawning main server on port {}...", main_port);
-    let main_child = sidecar::spawn_server(
-        &node_bin,
-        &tsx_cli,
-        &server_entry,
-        main_port,
-        &resource_dir,
-        &env_vars,
-    )?;
+        println!("[wandesk] Spawning main server on port {}...", main_port);
+        let main_child = sidecar::spawn_server(
+            &node_bin,
+            &tsx_cli,
+            &server_entry,
+            main_port,
+            &resource_dir,
+            &env_vars,
+        )?;
 
-    println!("[wandesk] Spawning apps server on port {}...", apps_port);
-    let apps_child = sidecar::spawn_server(
-        &node_bin,
-        &tsx_cli,
-        &apps_entry,
-        apps_port,
-        &resource_dir,
-        &env_vars,
-    )?;
+        println!("[wandesk] Spawning apps server on port {}...", apps_port);
+        let apps_child = sidecar::spawn_server(
+            &node_bin,
+            &tsx_cli,
+            &apps_entry,
+            apps_port,
+            &resource_dir,
+            &env_vars,
+        )?;
 
-    // Store processes in state
-    {
-        let state = app.state::<AppState>();
-        *state.main_process.lock().unwrap() = Some(main_child);
-        *state.apps_process.lock().unwrap() = Some(apps_child);
-    }
+        // Store processes in state
+        {
+            let state = app.state::<AppState>();
+            *state.main_process.lock().unwrap() = Some(main_child);
+            *state.apps_process.lock().unwrap() = Some(apps_child);
+        }
 
-    // 6. Health-check main server
+        (main_port, apps_port)
+    };
+
+    // Health-check servers
     let health_url = format!("http://127.0.0.1:{main_port}/api/health");
     println!("[wandesk] Waiting for main server...");
     sidecar::wait_for_health(&health_url, 60, Duration::from_millis(500))?;
 
-    // 7. Health-check apps server
     let apps_health_url = format!("http://127.0.0.1:{apps_port}/apps/health");
     println!("[wandesk] Waiting for apps server...");
     sidecar::wait_for_health(&apps_health_url, 30, Duration::from_millis(500))?;
 
     println!("[wandesk] All servers ready!");
 
-    // 8. Close splash, show main window
-    let _ = splash.close();
-
+    // Show main window
+    println!("[wandesk] Creating main window...");
     let main_window = WebviewWindowBuilder::new(
         app,
         "main",
@@ -164,21 +157,33 @@ fn boot_servers(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>
     .inner_size(1280.0, 800.0)
     .min_inner_size(960.0, 600.0)
     .center()
+    .visible(true)
     .build()?;
 
+    println!("[wandesk] Window created, showing...");
+    let _ = main_window.show();
     let _ = main_window.set_focus();
+    println!("[wandesk] Window shown.");
 
     Ok(())
 }
 
 /// Resolve platform-specific data directory for Wandesk.
-fn resolve_data_dir() -> PathBuf {
+/// In production uses Tauri's sandboxed app_data_dir; in dev falls back to a
+/// predictable path so repeated runs share the same DB.
+fn resolve_data_dir(app: &tauri::AppHandle) -> PathBuf {
     if let Ok(dir) = env::var("AIOS_DATA_DIR") {
         return PathBuf::from(dir);
     }
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Wandesk")
+    if cfg!(debug_assertions) {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Wandesk")
+    } else {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+    }
 }
 
 /// Resolve the resource directory containing the Node.js application.

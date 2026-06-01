@@ -30,12 +30,26 @@ try {
   console.warn("[tauri-dev] i18n bake failed or already baked, continuing...");
 }
 
+const PORT_VITE = 5173;
+
+console.log("[tauri-dev] Starting Vite frontend on :" + PORT_VITE);
+const viteProc = spawn("node", ["node_modules/vite/bin/vite.js", "--config", "gui/vite.config.ts", "gui", "--port", String(PORT_VITE)], {
+  cwd: ROOT,
+  stdio: "inherit",
+  env: {
+    ...process.env,
+    AIOS_DEV_FRONTEND: "1",
+  },
+});
+
 console.log("[tauri-dev] Starting main server on :" + PORT_MAIN);
 const mainProc = spawn("node", ["--import", "tsx", "server/main/index.ts", `--port=${PORT_MAIN}`], {
   cwd: ROOT,
   stdio: "inherit",
   env: {
     ...process.env,
+    AIOS_DEV_FRONTEND: "1",
+    AIOS_DEV_FRONTEND_ORIGIN: `http://localhost:${PORT_VITE}`,
     AIOS_MAIN_PORT: String(PORT_MAIN),
     AIOS_APPS_PORT: String(PORT_APPS),
   },
@@ -80,6 +94,7 @@ const waitFor = (url, maxRetries = 30) =>
 
 await waitFor(`http://127.0.0.1:${PORT_MAIN}/api/health`);
 await waitFor(`http://127.0.0.1:${PORT_APPS}/apps/health`);
+await waitFor(`http://localhost:${PORT_VITE}/`, 60);
 
 console.log("[tauri-dev] All servers ready. Tauri webview will connect to http://127.0.0.1:" + PORT_MAIN);
 
@@ -87,12 +102,14 @@ console.log("[tauri-dev] All servers ready. Tauri webview will connect to http:/
 // We need to stay alive so the Node servers keep running
 process.on("SIGTERM", () => {
   console.log("[tauri-dev] SIGTERM received, shutting down servers...");
+  viteProc.kill("SIGTERM");
   mainProc.kill("SIGTERM");
   appsProc.kill("SIGTERM");
   process.exit(0);
 });
 
 process.on("exit", () => {
+  viteProc.kill();
   mainProc.kill();
   appsProc.kill();
 });
